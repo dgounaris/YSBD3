@@ -4,113 +4,118 @@
 #include <string.h>
 #include <stdlib.h>
 
+#define CALL_OR_RETURN(call)  \
+  {                           \
+    BF_ErrorCode code = call; \
+    if (code != BF_OK) {      \
+      BF_PrintError(code);    \
+      return SR_ERROR;        \
+    }                         \
+  }                           \
+
+///////////////////////////////////////// Utility Functions /////////////////////////////////////////
+
+int checkAttributes(int fieldNo, int bufferSize){
+  if (bufferSize < 3 || bufferSize > BF_BUFFER_SIZE || fieldNo < 0 || fieldNo > 3)
+    return 0;
+  return 1;
+}
+
+BF_ErrorCode BF_Block_Init_Allocate_GetData(BF_Block** pBlock, int fileDesc, char** data){
+  BF_Block_Init(pBlock);
+  CALL_OR_RETURN(BF_AllocateBlock(fileDesc, *pBlock));
+  *data = BF_Block_GetData(*pBlock);
+  return BF_OK;
+}
+
+BF_ErrorCode BF_Block_Init_GetBlock_GetData(BF_Block** pBlock, int fileDesc, int blockNum, char** data){
+  BF_Block_Init(pBlock);
+  CALL_OR_RETURN(BF_GetBlock(fileDesc, blockNum, *pBlock));
+  *data = BF_Block_GetData(*pBlock);
+  return BF_OK;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
 SR_ErrorCode SR_Init() {
   // Your code goes here
-
   return SR_OK;
 }
 
 SR_ErrorCode SR_CreateFile(const char *fileName) {
   // Your code goes here
-  BF_ErrorCode code = BF_CreateFile(fileName);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
   int fileDesc;
-  code = BF_OpenFile(fileName, &fileDesc);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
-  BF_Block* firstBlock;
-  BF_Block_Init(&firstBlock);
-  BF_AllocateBlock(fileDesc, firstBlock);
-  char* bData = BF_Block_GetData(firstBlock);
   char* identifier = "HP_File";
+  char* bData;
+  
+  BF_Block* firstBlock;
+  
+  /* Creation of file */
+  CALL_OR_RETURN(BF_CreateFile(fileName));
+  CALL_OR_RETURN(BF_OpenFile(fileName, &fileDesc));
+  
+  /* Creation of metadata block */
+  CALL_OR_RETURN(BF_Block_Init_Allocate_GetData(&firstBlock, fileDesc, &bData)); // Custom function for initializing->allocating->gettingData
   memcpy(bData, identifier, strlen(identifier)+1);
   BF_Block_SetDirty(firstBlock);
-  BF_UnpinBlock(firstBlock);
+  CALL_OR_RETURN(BF_UnpinBlock(firstBlock));
   BF_Block_Destroy(&firstBlock);
-  code = BF_CloseFile(fileDesc);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
+  
+  CALL_OR_RETURN(BF_CloseFile(fileDesc));
+
   return SR_OK;
 }
 
 SR_ErrorCode SR_OpenFile(const char *fileName, int *fileDesc) {
   // Your code goes here
   char* identifier = "HP_File";
-  BF_ErrorCode code = BF_OpenFile(fileName, fileDesc);
+  char* checkData;
+  
   BF_Block* checkBlock;
-  BF_Block_Init(&checkBlock);
-  if (code != BF_OK) {
-    BF_PrintError(code);
+  
+  printf("Openfile\n");
+  fflush(stdout);
+  CALL_OR_RETURN(BF_OpenFile(fileName, fileDesc));
+  printf("Openfile end\n");
+  printf("Custom\n");
+  fflush(stdout);
+  CALL_OR_RETURN(BF_Block_Init_GetBlock_GetData(&checkBlock, *fileDesc, 0, &checkData)); // Custom function for initializing->gettingBlock->gettingData
+printf("Custom end\n");
+  fflush(stdout);
+
+  if (strcmp(identifier, checkData) != 0) {
+    CALL_OR_RETURN(BF_UnpinBlock(checkBlock));
     return SR_ERROR;
   }
-  code = BF_GetBlock(*fileDesc, 0, checkBlock);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
-  char* checkData = BF_Block_GetData(checkBlock);
-  if (strcmp(identifier, checkData)!=0) {
-    return SR_ERROR;
-  }
-  code = BF_UnpinBlock(checkBlock);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
+
   return SR_OK;
 }
 
 SR_ErrorCode SR_CloseFile(int fileDesc) {
   // Your code goes here
-  BF_ErrorCode code = BF_CloseFile(fileDesc);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
+  CALL_OR_RETURN(BF_CloseFile(fileDesc));
+  
   return SR_OK;
 }
 
 SR_ErrorCode SR_InsertEntry(int fileDesc,	Record record) {
   // Your code goes here
-  //records are written to have same length each time, optimizing blocks
+  // records are written to have same length each time, optimizing blocks
   BF_ErrorCode code;
   BF_Block* myBlock;
   BF_Block_Init(&myBlock);
   int bCount;
   char* bData;
   int writtenRecords;
-  code = BF_GetBlockCounter(fileDesc, &bCount);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
-  code = BF_GetBlock(fileDesc, bCount-1, myBlock);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
+  CALL_OR_RETURN(BF_GetBlockCounter(fileDesc, &bCount));
+  CALL_OR_RETURN(BF_GetBlock(fileDesc, bCount-1, myBlock));
   bData = BF_Block_GetData(myBlock);
   memcpy(&writtenRecords, bData, sizeof(int));
   if (bCount<2 || writtenRecords>=(BF_BLOCK_SIZE-sizeof(int))/sizeof(Record)) {
     //either we are on file block 0, or no space in current data block
     //unpins previous block since we are allocating a new one
-    code = BF_UnpinBlock(myBlock);
-    if (code != BF_OK) {
-      BF_PrintError(code);
-      return SR_ERROR;
-    }
-    code = BF_AllocateBlock(fileDesc, myBlock);
-    if (code != BF_OK) {
-      BF_PrintError(code);
-      return SR_ERROR;
-    }
+    CALL_OR_RETURN(BF_UnpinBlock(myBlock));
+   CALL_OR_RETURN(BF_AllocateBlock(fileDesc, myBlock));
     bData = BF_Block_GetData(myBlock);
     writtenRecords = 0;
     memcpy(bData, &writtenRecords, sizeof(int));
@@ -122,12 +127,9 @@ SR_ErrorCode SR_InsertEntry(int fileDesc,	Record record) {
     memcpy(bData, &writtenRecords, sizeof(int));
   }
   BF_Block_SetDirty(myBlock);
-  code = BF_UnpinBlock(myBlock);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
+  CALL_OR_RETURN(BF_UnpinBlock(myBlock));
   BF_Block_Destroy(&myBlock);
+  
   return SR_OK;
 }
 
@@ -138,13 +140,14 @@ SR_ErrorCode SR_SortedFile(
   int bufferSize
 ) {
   // Your code goes here
-  if (bufferSize<3 || bufferSize > BF_BUFFER_SIZE) {
+  if (!checkAttributes(fieldNo, bufferSize)) {
     return SR_ERROR;
   }
+
   int input_fileDesc, temp_fileDesc;
   char* temp_filename = "tempFile";
-  BF_CreateFile(temp_filename);
-  BF_OpenFile(temp_filename, &temp_fileDesc);
+  CALL_OR_RETURN(BF_CreateFile(temp_filename));
+  CALL_OR_RETURN(BF_OpenFile(temp_filename, &temp_fileDesc));
   BF_Block* tempFileBlock;
 
   //DG code
@@ -158,9 +161,7 @@ SR_ErrorCode SR_SortedFile(
   SR_OpenFile(input_filename, &input_fileDesc);
   //count the total blocks
   int totalBlocks;
-  if (BF_GetBlockCounter(input_fileDesc, &totalBlocks) != BF_OK) {
-    return SR_ERROR;
-  }
+  CALL_OR_RETURN(BF_GetBlockCounter(input_fileDesc, &totalBlocks));
   //algorithm for first sorting, inside chunks
   int currentBlock = 1;
   int totalRecords = 0; //counts total records in chunk, used in quicksort
@@ -168,7 +169,7 @@ SR_ErrorCode SR_SortedFile(
     //read block data from the chunk blocks
     for (i=0;i<bufferSize && currentBlock<totalBlocks;i++) {
       printf("%d of %d\n", currentBlock, totalBlocks);
-      BF_GetBlock(input_fileDesc, currentBlock, mBlocks[i]);
+      CALL_OR_RETURN(BF_GetBlock(input_fileDesc, currentBlock, mBlocks[i]));
       chunkTable[i] = BF_Block_GetData(mBlocks[i]);
       int bRecords;
       memcpy(&bRecords, chunkTable[i], sizeof(int));
@@ -181,11 +182,11 @@ SR_ErrorCode SR_SortedFile(
     for (k=0;k<i;k++) {
       //to debug by checking a chunk sorted version of unsorted file, uncomment the following line
       //BF_Block_SetDirty(mBlocks[k]);
-      BF_AllocateBlock(temp_fileDesc, tempFileBlock);
+      CALL_OR_RETURN(BF_AllocateBlock(temp_fileDesc, tempFileBlock));
       char* tempBData = BF_Block_GetData(tempFileBlock);
       memcpy(tempBData, chunkTable[k], BF_BLOCK_SIZE);
-      BF_UnpinBlock(tempFileBlock);
-      BF_UnpinBlock(mBlocks[k]);
+      CALL_OR_RETURN(BF_UnpinBlock(tempFileBlock));
+      CALL_OR_RETURN(BF_UnpinBlock(mBlocks[k]));
     }
     totalRecords = 0;
   }
@@ -263,7 +264,7 @@ int partition(char** chunkTable, int low, int high, int fieldNo) {
 }
 
 void quickSort(char** chunkTable, int low, int high, int fieldNo) {
-  if (low<high) {
+  if (low < high) {
     int pIndex = partition(chunkTable, low, high, fieldNo);
     quickSort(chunkTable, low, pIndex-1, fieldNo);
     quickSort(chunkTable, pIndex+1, high, fieldNo);
@@ -272,42 +273,36 @@ void quickSort(char** chunkTable, int low, int high, int fieldNo) {
 
 SR_ErrorCode SR_PrintAllEntries(int fileDesc) {
   // Your code goes here
-  BF_ErrorCode code;
   int totalBlocks;
+  int blockRecs;
+  int i, j;
+  Record rec;
+
   BF_Block* myBlock;
   BF_Block_Init(&myBlock);
-  code = BF_GetBlockCounter(fileDesc, &totalBlocks);
-  if (code != BF_OK) {
-    BF_PrintError(code);
-    return SR_ERROR;
-  }
-  int i=1;
-  for (;i<totalBlocks;i++) {
-    code = BF_GetBlock(fileDesc, i, myBlock);
-    if (code != BF_OK) {
-      BF_PrintError(code);
-      return SR_ERROR;
-    }
+  
+  CALL_OR_RETURN(BF_GetBlockCounter(fileDesc, &totalBlocks));
+  
+  for (i = 1; i < totalBlocks; i++) {
+    CALL_OR_RETURN(BF_GetBlock(fileDesc, i, myBlock));
     char* bData = BF_Block_GetData(myBlock);
-    int blockRecs;
+    
     memcpy(&blockRecs, bData, sizeof(int));
-    int j=0;
-    for (;j<blockRecs;j++) {
-      Record* rec = malloc(sizeof(Record));
-      memcpy(rec, bData + sizeof(int) + j*sizeof(Record), sizeof(Record));
+
+    for (j = 0; j < blockRecs; j++) {
+      Record rec;
+      memcpy(&rec, bData + sizeof(int) + j*sizeof(Record), sizeof(Record));
       printf("%d, %s, %s, %s\n",
-        rec->id,
-        rec->name,
-        rec->surname,
-        rec->city
+        rec.id,
+        rec.name,
+        rec.surname,
+        rec.city
       );
     }
-    code = BF_UnpinBlock(myBlock);
-    if (code != BF_OK) {
-      BF_PrintError(code);
-      return SR_ERROR;
-    }
+    
+    CALL_OR_RETURN(BF_UnpinBlock(myBlock));
   }
   BF_Block_Destroy(&myBlock);
+  
   return SR_OK;
 }
