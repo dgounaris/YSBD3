@@ -14,25 +14,122 @@
   }                           \
 
 ///////////////////////////////////////// Utility Functions /////////////////////////////////////////
-
-int checkAttributes(int fieldNo, int bufferSize){
+/* Utility function to check attributes of sortedFile function */
+int checkAttributes(int fieldNo, int bufferSize) {
   if (bufferSize < 3 || bufferSize > BF_BUFFER_SIZE || fieldNo < 0 || fieldNo > 3)
     return 0;
   return 1;
 }
 
-BF_ErrorCode BF_Block_Init_Allocate_GetData(BF_Block** pBlock, int fileDesc, char** data){
+/* Custom BF function for initializing->allocating->gettingData */
+BF_ErrorCode BF_Block_Init_Allocate_GetData(BF_Block** pBlock, int fileDesc, char** data) {
   BF_Block_Init(pBlock);
   CALL_OR_RETURN(BF_AllocateBlock(fileDesc, *pBlock));
   *data = BF_Block_GetData(*pBlock);
   return BF_OK;
 }
 
-BF_ErrorCode BF_Block_Init_GetBlock_GetData(BF_Block** pBlock, int fileDesc, int blockNum, char** data){
+/* Custom BF function for allocating->gettingData */
+BF_ErrorCode BF_Block_Allocate_GetData(BF_Block** pBlock, int fileDesc, char** data) {
+  CALL_OR_RETURN(BF_AllocateBlock(fileDesc, *pBlock));
+  *data = BF_Block_GetData(*pBlock);
+  return BF_OK;
+}
+
+/* Custom BF function for initializing->gettingBlock->gettingData */
+BF_ErrorCode BF_Block_Init_GetBlock_GetData(BF_Block** pBlock, int fileDesc, int blockNum, char** data) {
   BF_Block_Init(pBlock);
   CALL_OR_RETURN(BF_GetBlock(fileDesc, blockNum, *pBlock));
   *data = BF_Block_GetData(*pBlock);
   return BF_OK;
+}
+
+int getRecordCount(char* data) {
+  int numberRecords;
+  memcpy(&numberRecords, data, sizeof(int));
+  return numberRecords;
+}
+
+void setRecordCount(char* data, int numberRecords) {
+  memcpy(data, &numberRecords, sizeof(int));
+}
+
+void increaseRecordCount(char* data) {
+  int numberRecords;
+  memcpy(&numberRecords, data, sizeof(int));
+  numberRecords++;
+  memcpy(data, &numberRecords, sizeof(int));
+}
+
+/* 
+ Utility function to get records from multiple block arrays, used in quicksort
+ we suppose correct use, there is no check for false input 
+*/
+Record* getSparseRecord(char** chunkTable, int index) {
+  int passedRecords=0, i=0, bRecords;           //reminder, int in start of each blockdata shows how many records are in it
+  while(1) {                                    //loop through block data to find the block containing the index
+    memcpy(&bRecords, chunkTable[i], sizeof(int));
+    if (passedRecords+bRecords>=index) {        //index is in this block
+      break;
+    }
+    passedRecords += bRecords;                  //if not in this block, change variables accordingly
+    i++;
+  }
+  Record* mRecord = (Record*)(chunkTable[i]+sizeof(int)+(index-passedRecords-1)*sizeof(Record));
+  return mRecord;
+}
+
+/* Compares 2 records based on the given fieldNo */
+int compareRecords(Record* r1, Record* r2, int fieldNo) {
+  if (fieldNo==0) {
+    if (r1->id <= r2->id)
+      return 1;
+  }
+  if (fieldNo==1) {
+    if (strcmp(r1->name, r2->name)<=0)
+      return 1;
+  }
+  if (fieldNo==2) {
+    if (strcmp(r1->surname, r2->surname)<=0)
+      return 1;
+  }
+  if (fieldNo==3) {
+    if (strcmp(r1->city, r2->city)<=0)
+      return 1;
+  }
+  return 0;
+}
+
+/* Takes last element as pivot and splits for quicksort */
+int partition(char** chunkTable, int low, int high, int fieldNo) {
+  Record* pivot = getSparseRecord(chunkTable, high);
+  Record* tempRec = malloc(sizeof(Record));
+  Record* lowRec;
+  int i=low;
+  int j;
+  for (j=low;j<=high-1;j++) {
+    Record* currRecord = getSparseRecord(chunkTable, j);
+    if (compareRecords(currRecord, pivot, fieldNo)) {
+      lowRec = getSparseRecord(chunkTable, i);
+      memcpy(tempRec, currRecord, sizeof(Record));
+      memcpy(currRecord, lowRec, sizeof(Record));
+      memcpy(lowRec, tempRec, sizeof(Record));
+      i++;
+    }
+  }
+  lowRec = getSparseRecord(chunkTable, i);
+  memcpy(tempRec, pivot, sizeof(Record));
+  memcpy(pivot, lowRec, sizeof(Record));
+  memcpy(lowRec, tempRec, sizeof(Record));
+  return i;
+}
+
+void quickSort(char** chunkTable, int low, int high, int fieldNo) {
+  if (low < high) {
+    int pIndex = partition(chunkTable, low, high, fieldNo);
+    quickSort(chunkTable, low, pIndex-1, fieldNo);
+    quickSort(chunkTable, pIndex+1, high, fieldNo);
+  }
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -55,7 +152,7 @@ SR_ErrorCode SR_CreateFile(const char *fileName) {
   CALL_OR_RETURN(BF_OpenFile(fileName, &fileDesc));
   
   /* Creation of metadata block */
-  CALL_OR_RETURN(BF_Block_Init_Allocate_GetData(&firstBlock, fileDesc, &bData)); // Custom function for initializing->allocating->gettingData
+  CALL_OR_RETURN(BF_Block_Init_Allocate_GetData(&firstBlock, fileDesc, &bData)); // Initializing->allocating->gettingData
   memcpy(bData, identifier, strlen(identifier)+1);
   BF_Block_SetDirty(firstBlock);
   CALL_OR_RETURN(BF_UnpinBlock(firstBlock));
@@ -72,16 +169,9 @@ SR_ErrorCode SR_OpenFile(const char *fileName, int *fileDesc) {
   char* checkData;
   
   BF_Block* checkBlock;
-  
-  printf("Openfile\n");
-  fflush(stdout);
+
   CALL_OR_RETURN(BF_OpenFile(fileName, fileDesc));
-  printf("Openfile end\n");
-  printf("Custom\n");
-  fflush(stdout);
-  CALL_OR_RETURN(BF_Block_Init_GetBlock_GetData(&checkBlock, *fileDesc, 0, &checkData)); // Custom function for initializing->gettingBlock->gettingData
-printf("Custom end\n");
-  fflush(stdout);
+  CALL_OR_RETURN(BF_Block_Init_GetBlock_GetData(&checkBlock, *fileDesc, 0, &checkData)); // Initializing->gettingBlock->gettingData
 
   if (strcmp(identifier, checkData) != 0) {
     CALL_OR_RETURN(BF_UnpinBlock(checkBlock));
@@ -98,34 +188,29 @@ SR_ErrorCode SR_CloseFile(int fileDesc) {
   return SR_OK;
 }
 
-SR_ErrorCode SR_InsertEntry(int fileDesc,	Record record) {
+SR_ErrorCode SR_InsertEntry(int fileDesc, Record record) {
   // Your code goes here
-  // records are written to have same length each time, optimizing blocks
-  BF_ErrorCode code;
-  BF_Block* myBlock;
-  BF_Block_Init(&myBlock);
   int bCount;
-  char* bData;
   int writtenRecords;
+  char* bData;
+  BF_Block* myBlock;                                                                 // Records are written to have same length each time, optimizing blocks
+  
   CALL_OR_RETURN(BF_GetBlockCounter(fileDesc, &bCount));
-  CALL_OR_RETURN(BF_GetBlock(fileDesc, bCount-1, myBlock));
-  bData = BF_Block_GetData(myBlock);
+  CALL_OR_RETURN(BF_Block_Init_GetBlock_GetData(&myBlock, fileDesc, bCount-1, &bData));
+
   memcpy(&writtenRecords, bData, sizeof(int));
-  if (bCount<2 || writtenRecords>=(BF_BLOCK_SIZE-sizeof(int))/sizeof(Record)) {
-    //either we are on file block 0, or no space in current data block
-    //unpins previous block since we are allocating a new one
-    CALL_OR_RETURN(BF_UnpinBlock(myBlock));
-   CALL_OR_RETURN(BF_AllocateBlock(fileDesc, myBlock));
-    bData = BF_Block_GetData(myBlock);
-    writtenRecords = 0;
-    memcpy(bData, &writtenRecords, sizeof(int));
+  if (bCount < 2 || writtenRecords >= (BF_BLOCK_SIZE-sizeof(int))/sizeof(Record)) {  // Either we are on file block 0, or no space in current data block
+    CALL_OR_RETURN(BF_UnpinBlock(myBlock));                                          // unpins previous block since we are allocating a new one
+    CALL_OR_RETURN(BF_Block_Allocate_GetData(&myBlock, fileDesc, &bData));
+    setRecordCount(bData, 0);
   }
+
   memcpy(&writtenRecords, bData, sizeof(int));
-  if (writtenRecords<(BF_BLOCK_SIZE-sizeof(int))/sizeof(Record)) { //record fits in block
+  if ( writtenRecords < (BF_BLOCK_SIZE-sizeof(int))/sizeof(Record) ) {               // Record fits in block
     memcpy(bData + sizeof(int) + writtenRecords*sizeof(Record), &record, sizeof(Record));
-    writtenRecords++;
-    memcpy(bData, &writtenRecords, sizeof(int));
+    increaseRecordCount(bData);
   }
+  
   BF_Block_SetDirty(myBlock);
   CALL_OR_RETURN(BF_UnpinBlock(myBlock));
   BF_Block_Destroy(&myBlock);
@@ -195,80 +280,6 @@ SR_ErrorCode SR_SortedFile(
   SR_CloseFile(temp_fileDesc);
   SR_CloseFile(input_fileDesc);
   return SR_OK;
-}
-
-//utility function to get records from multiple block arrays, used in quicksort
-//we suppose correct use, there is no check for false input
-Record* getSparseRecord(char** chunkTable, int index) {
-  //reminder, int in start of each blockdata shows how many records are in it
-  int passedRecords=0, i=0, bRecords;
-  while(1) { //loop through block data to find the block containing the index
-    memcpy(&bRecords, chunkTable[i], sizeof(int));
-    if (passedRecords+bRecords>=index) { //index is in this block
-      break;
-    }
-    //if not in this block, change variables accordingly
-    passedRecords += bRecords;
-    i++;
-  }
-  Record* mRecord = (Record*)(chunkTable[i]+sizeof(int)+(index-passedRecords-1)*sizeof(Record));
-  return mRecord;
-}
-
-int compareRecords(Record* r1, Record* r2, int fieldNo) {
-  if (fieldNo==0) {
-    if (r1->id <= r2->id) {
-      return 1;
-    }
-  }
-  if (fieldNo==1) {
-    if (strcmp(r1->name, r2->name)<=0) {
-      return 1;
-    }
-  }
-  if (fieldNo==2) {
-    if (strcmp(r1->surname, r2->surname)<=0) {
-      return 1;
-    }
-  }
-  if (fieldNo==3) {
-    if (strcmp(r1->city, r2->city)<=0) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-//takes last element as pivot and splits for quicksort
-int partition(char** chunkTable, int low, int high, int fieldNo) {
-  Record* pivot = getSparseRecord(chunkTable, high);
-  Record* tempRec = malloc(sizeof(Record));
-  Record* lowRec;
-  int i=low;
-  int j;
-  for (j=low;j<=high-1;j++) {
-    Record* currRecord = getSparseRecord(chunkTable, j);
-    if (compareRecords(currRecord, pivot, fieldNo)) {
-      lowRec = getSparseRecord(chunkTable, i);
-      memcpy(tempRec, currRecord, sizeof(Record));
-      memcpy(currRecord, lowRec, sizeof(Record));
-      memcpy(lowRec, tempRec, sizeof(Record));
-      i++;
-    }
-  }
-  lowRec = getSparseRecord(chunkTable, i);
-  memcpy(tempRec, pivot, sizeof(Record));
-  memcpy(pivot, lowRec, sizeof(Record));
-  memcpy(lowRec, tempRec, sizeof(Record));
-  return i;
-}
-
-void quickSort(char** chunkTable, int low, int high, int fieldNo) {
-  if (low < high) {
-    int pIndex = partition(chunkTable, low, high, fieldNo);
-    quickSort(chunkTable, low, pIndex-1, fieldNo);
-    quickSort(chunkTable, pIndex+1, high, fieldNo);
-  }
 }
 
 SR_ErrorCode SR_PrintAllEntries(int fileDesc) {
