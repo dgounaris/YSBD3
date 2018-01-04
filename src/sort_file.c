@@ -177,6 +177,7 @@ SR_ErrorCode SR_OpenFile(const char *fileName, int *fileDesc) {
     CALL_OR_RETURN(BF_UnpinBlock(checkBlock));
     return SR_ERROR;
   }
+  CALL_OR_RETURN(BF_UnpinBlock(checkBlock));
 
   return SR_OK;
 }
@@ -231,9 +232,10 @@ SR_ErrorCode SR_SortedFile(
 
   int input_fileDesc, temp_fileDesc;
   char* temp_filename = "tempFile";
-  CALL_OR_RETURN(BF_CreateFile(temp_filename));
-  CALL_OR_RETURN(BF_OpenFile(temp_filename, &temp_fileDesc));
+  CALL_OR_RETURN(SR_CreateFile(temp_filename));
+  CALL_OR_RETURN(SR_OpenFile(temp_filename, &temp_fileDesc));
   BF_Block* tempFileBlock;
+  BF_Block_Init(&tempFileBlock);
 
   //DG code
   BF_Block** mBlocks = malloc(bufferSize*sizeof(BF_Block*));
@@ -253,7 +255,7 @@ SR_ErrorCode SR_SortedFile(
   while (currentBlock < totalBlocks) {
     //read block data from the chunk blocks
     for (i=0;i<bufferSize && currentBlock<totalBlocks;i++) {
-      printf("%d of %d\n", currentBlock, totalBlocks);
+      printf("%d of %d\n", currentBlock, totalBlocks-1);
       CALL_OR_RETURN(BF_GetBlock(input_fileDesc, currentBlock, mBlocks[i]));
       chunkTable[i] = BF_Block_GetData(mBlocks[i]);
       int bRecords;
@@ -270,13 +272,14 @@ SR_ErrorCode SR_SortedFile(
       CALL_OR_RETURN(BF_AllocateBlock(temp_fileDesc, tempFileBlock));
       char* tempBData = BF_Block_GetData(tempFileBlock);
       memcpy(tempBData, chunkTable[k], BF_BLOCK_SIZE);
+      BF_Block_SetDirty(tempFileBlock);
       CALL_OR_RETURN(BF_UnpinBlock(tempFileBlock));
       CALL_OR_RETURN(BF_UnpinBlock(mBlocks[k]));
     }
     totalRecords = 0;
   }
   //DG code end
-
+  
   SR_CloseFile(temp_fileDesc);
   SR_CloseFile(input_fileDesc);
   return SR_OK;
