@@ -132,6 +132,104 @@ void quickSort(char** chunkTable, int low, int high, int fieldNo) {
   }
 }
 
+BF_ErrorCode internalSort(int input_fileDesc, int temp_fileDesc, int fieldNo, int bufferSize){
+  int i, k;
+  int bRecords;
+  int totalBlocks, currentBlock, totalRecords;
+  char** chunkTable;
+  BF_Block* tempFileBlock;
+  BF_Block_Init(&tempFileBlock);  
+
+  BF_Block** mBlocks = (BF_Block**)malloc(bufferSize*sizeof(BF_Block*));
+  for (i = 0; i < bufferSize; i++) {
+    BF_Block_Init(&mBlocks[i]);
+  }
+
+  chunkTable = (char**)malloc(bufferSize*sizeof(char*));     //chunkTable is an array of pointers to the block data
+
+  CALL_OR_RETURN(BF_GetBlockCounter(input_fileDesc, &totalBlocks));     // Count the total blocks
+  
+  currentBlock = 1;     // Algorithm for first sorting, inside chunks
+  totalRecords = 0;     // counts total records in chunk, used in quicksort
+  while (currentBlock < totalBlocks) {
+    for(i = 0; (i < bufferSize) && (currentBlock < totalBlocks); i++) {        // Read block data from the chunk blocks
+      printf("%d of %d\n", currentBlock, totalBlocks-1);
+      CALL_OR_RETURN(BF_GetBlock(input_fileDesc, currentBlock, mBlocks[i]));
+      chunkTable[i] = BF_Block_GetData(mBlocks[i]);
+      memcpy(&bRecords, chunkTable[i], sizeof(int));
+      totalRecords += bRecords;
+      currentBlock++;
+    }
+    quickSort(chunkTable, 1, totalRecords, fieldNo);        // Keep in mind that indexing for records is [1,total]
+    for(k = 0; k < i; k++) {
+      //to debug by checking a chunk sorted version of unsorted file, uncomment the following line
+      //BF_Block_SetDirty(mBlocks[k]);
+      CALL_OR_RETURN(BF_AllocateBlock(temp_fileDesc, tempFileBlock));
+      char* tempBData = BF_Block_GetData(tempFileBlock);
+      memcpy(tempBData, chunkTable[k], BF_BLOCK_SIZE);
+      BF_Block_SetDirty(tempFileBlock);
+      CALL_OR_RETURN(BF_UnpinBlock(tempFileBlock));
+      CALL_OR_RETURN(BF_UnpinBlock(mBlocks[k]));
+    }
+    totalRecords = 0;
+  }   
+
+  BF_Block_Destroy(&tempFileBlock);
+  for (i = 0; i < bufferSize; i++) {
+    free(mBlocks[i]);
+  }
+  free(mBlocks);
+  free(chunkTable);
+
+  return SR_OK;
+}
+
+int countChunks(int totalBlocks, int chunkSize){
+    return (totalBlocks/chunkSize) + ((totalBlocks%chunkSize != 0) ? 1:0);
+}
+
+BF_ErrorCode recursiveMergeSort(char** chunkTable, int numChunks, int chunkSize, int fieldNo){
+  
+}
+
+BF_ErrorCode externalSort(int output_fileDesc, int temp_fileDesc, int fieldNo, int bufferSize){
+  int i;
+  int totalBlocks, totalChunks;
+  char* identifier = "SR_File";
+  char* mdata;
+  char** chunkTable;
+  BF_Block* myBlock;
+  BF_Block_Init(&myBlock);  
+
+
+  /* Creating metadata block of output file */
+  CALL_OR_RETURN(BF_Block_Init_Allocate_GetData(&myBlock, output_fileDesc, &mdata)); // Initializing->allocating->gettingData
+  memcpy(mdata, identifier, strlen(identifier)+1);
+  BF_Block_SetDirty(myBlock);
+  CALL_OR_RETURN(BF_UnpinBlock(myBlock));
+
+  BF_Block** pBlocks = (BF_Block**)malloc(bufferSize*sizeof(BF_Block*));
+  for (i = 0; i < bufferSize; i++) {
+    BF_Block_Init(&pBlocks[i]);
+  }
+  chunkTable = (char**)malloc(bufferSize*sizeof(char*));     //chunkTable is an array of pointers to the block data
+
+  CALL_OR_RETURN(BF_GetBlockCounter(temp_fileDesc, &totalBlocks));     // Count the total blocks
+  totalChunks = countChunks(totalBlocks-1, bufferSize);
+  
+  CALL_OR_RETURN(recursiveMergeSort(chunkTable, totalChunks, bufferSize, fieldNo));
+  
+
+  BF_Block_Destroy(&myBlock);
+  for (i = 0; i < bufferSize; i++) {
+    free(pBlocks[i]);
+  }
+  free(pBlocks);
+  free(chunkTable);
+
+  return SR_OK;
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 
 SR_ErrorCode SR_Init() {
@@ -142,7 +240,7 @@ SR_ErrorCode SR_Init() {
 SR_ErrorCode SR_CreateFile(const char *fileName) {
   // Your code goes here
   int fileDesc;
-  char* identifier = "HP_File";
+  char* identifier = "SR_File";
   char* bData;
   
   BF_Block* firstBlock;
@@ -165,7 +263,7 @@ SR_ErrorCode SR_CreateFile(const char *fileName) {
 
 SR_ErrorCode SR_OpenFile(const char *fileName, int *fileDesc) {
   // Your code goes here
-  char* identifier = "HP_File";
+  char* identifier = "SR_File";
   char* checkData;
   
   BF_Block* checkBlock;
@@ -178,7 +276,8 @@ SR_ErrorCode SR_OpenFile(const char *fileName, int *fileDesc) {
     return SR_ERROR;
   }
   CALL_OR_RETURN(BF_UnpinBlock(checkBlock));
-
+  BF_Block_Destroy(&checkBlock);
+  
   return SR_OK;
 }
 
@@ -226,62 +325,31 @@ SR_ErrorCode SR_SortedFile(
   int bufferSize
 ) {
   // Your code goes here
+  int input_fileDesc, temp_fileDesc, output_fileDesc;
+  char* temp_filename = "tempFile";
+
   if (!checkAttributes(fieldNo, bufferSize)) {
     return SR_ERROR;
   }
 
-  int input_fileDesc, temp_fileDesc;
-  char* temp_filename = "tempFile";
-  CALL_OR_RETURN(SR_CreateFile(temp_filename));
+  //DG code 
+  CALL_OR_RETURN(SR_CreateFile(temp_filename));     // Temporary file to hold sorted chunks
   CALL_OR_RETURN(SR_OpenFile(temp_filename, &temp_fileDesc));
-  BF_Block* tempFileBlock;
-  BF_Block_Init(&tempFileBlock);
+  CALL_OR_RETURN(SR_OpenFile(input_filename, &input_fileDesc));
 
-  //DG code
-  BF_Block** mBlocks = malloc(bufferSize*sizeof(BF_Block*));
-  int i;
-  for (i=0;i<bufferSize;i++) {
-    BF_Block_Init(&mBlocks[i]);
-  }
-  //chunkTable is an array of pointers to the block data
-  char** chunkTable = malloc(bufferSize*sizeof(char*));
-  SR_OpenFile(input_filename, &input_fileDesc);
-  //count the total blocks
-  int totalBlocks;
-  CALL_OR_RETURN(BF_GetBlockCounter(input_fileDesc, &totalBlocks));
-  //algorithm for first sorting, inside chunks
-  int currentBlock = 1;
-  int totalRecords = 0; //counts total records in chunk, used in quicksort
-  while (currentBlock < totalBlocks) {
-    //read block data from the chunk blocks
-    for (i=0;i<bufferSize && currentBlock<totalBlocks;i++) {
-      printf("%d of %d\n", currentBlock, totalBlocks-1);
-      CALL_OR_RETURN(BF_GetBlock(input_fileDesc, currentBlock, mBlocks[i]));
-      chunkTable[i] = BF_Block_GetData(mBlocks[i]);
-      int bRecords;
-      memcpy(&bRecords, chunkTable[i], sizeof(int));
-      totalRecords += bRecords;
-      currentBlock++;
-    }
-    //keep in mind that indexing for records is [1,total]
-    quickSort(chunkTable, 1, totalRecords, fieldNo);
-    int k;
-    for (k=0;k<i;k++) {
-      //to debug by checking a chunk sorted version of unsorted file, uncomment the following line
-      //BF_Block_SetDirty(mBlocks[k]);
-      CALL_OR_RETURN(BF_AllocateBlock(temp_fileDesc, tempFileBlock));
-      char* tempBData = BF_Block_GetData(tempFileBlock);
-      memcpy(tempBData, chunkTable[k], BF_BLOCK_SIZE);
-      BF_Block_SetDirty(tempFileBlock);
-      CALL_OR_RETURN(BF_UnpinBlock(tempFileBlock));
-      CALL_OR_RETURN(BF_UnpinBlock(mBlocks[k]));
-    }
-    totalRecords = 0;
-  }
+  CALL_OR_RETURN(internalSort(input_fileDesc, temp_fileDesc, fieldNo, bufferSize));      // Internal sorting of chunks using quicksort
+
+  CALL_OR_RETURN(SR_CloseFile(input_fileDesc));     // Input file not needed anymore, no changes have been made
   //DG code end
+
+  CALL_OR_RETURN(SR_CreateFile(output_filename));     // Output file
+  CALL_OR_RETURN(SR_OpenFile(output_filename, &output_fileDesc));
+
+  CALL_OR_RETURN(externalSort(output_fileDesc, temp_fileDesc, fieldNo, bufferSize));
   
   SR_CloseFile(temp_fileDesc);
-  SR_CloseFile(input_fileDesc);
+  SR_CloseFile(output_fileDesc);
+
   return SR_OK;
 }
 
