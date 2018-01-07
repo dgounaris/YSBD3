@@ -14,6 +14,7 @@
   }                           \
 
 ///////////////////////////////////////// Utility Functions /////////////////////////////////////////
+
 /* Utility function to check attributes of sortedFile function */
 int checkAttributes(int fieldNo, int bufferSize) {
   if (bufferSize < 3 || bufferSize > BF_BUFFER_SIZE || fieldNo < 0 || fieldNo > 3)
