@@ -189,8 +189,53 @@ int countChunks(int totalBlocks, int chunkSize){
     return (totalBlocks/chunkSize) + ((totalBlocks%chunkSize != 0) ? 1:0);
 }
 
-BF_ErrorCode recursiveMergeSort(char** chunkTable, int numChunks, int chunkSize, int fieldNo){
-  
+BF_ErrorCode recursiveMergeSort(int output_fileDesc, int temp_fileDesc, char** chunkTable, int numChunks, int chunkSize, int fieldNo, int firstBlockIndex, int secondBlockIndex){
+
+    //DC code Start
+    //Merging buffersize blocks...
+    int tempMerge_fileDesc;
+    //Creating a temporary file that will hold the merged blocks.
+    char* tempMerge_filename = "tempMergeFile";
+    CALL_OR_RETURN(SR_CreateFile(tempMerge_filename));
+    CALL_OR_RETURN(SR_OpenFile(tempMerge_filename, &tempMerge_fileDesc));
+
+    BF_Block *firstChunkBlock, *secondChunkBlock;                                                         //Pointers to the first Block of the first and second chunk respectively.
+    char **firstChunkBlockData, **secondChunkBlockData;                                                   //Pointers to the data of the first Block of the first and second chunk respectively.
+
+    CALL_OR_RETURN(BF_Block_Init_GetBlock_GetData(&firstChunkBlock, *temp_fileDesc, 0, &firstChunkBlockData)); // Initializing -> gettingBlock from temp file -> gettingData from the block
+    CALL_OR_RETURN(BF_Block_Init_GetBlock_GetData(&firstChunkBlock, *temp_fileDesc, chunkSize, &secondChunkBlockData)); // Initializing -> gettingBlock from temp file -> gettingData from the block
+
+    Record minRecord;
+    memcpy(&minRecord, firstChunkBlockData + sizeof(int), sizeof(Record));                //First Record is by default the minimum.
+
+    for(int i=0; i< chunkSize; i++){                                                      //For each block in the chunk, repeat...
+        Record tempRecordFirstBlock, tempRecordSecondBlock;
+        int recordCountFirstBlock, recordCountSecondBlock;
+        memcpy(&recordCount, firstChunkBlockData, sizeof(int));                           //Get how many records there are in the blocks.
+        memcpy(&recordCount, secondChunkBlockData, sizeof(int));
+        for(int j = 0; j < recordCount; j++){
+            memcpy(&tempRecordFirstBlock, firstChunkBlockData + sizeof(int) + j* sizeof(Record), sizeof(Record));       //Writing record data of first block in a racord.
+            memcpy(&tempRecordSecondBlock, secondChunkBlockData + sizeof(int) + j* sizeof(Record), sizeof(Record));     //Writing record data of second block in a record.
+            //Checking if a record in either chunk is smaller than the current min record
+            //At the end, insert the minimum record in the new block and repeat for a new record
+            if(compareRecords(tempRecordFirstBlock, minRecord, fieldNo)){
+                minRecord = tempRecordFirstBlock;
+                //NEED TO DELETE RECORD FROM BLOCK HERE
+            }
+            if(compareRecords(tempRecordSecondBlock, minRecord, fieldNo)){
+                minRecord = tempRecordSecondBlock;
+                //NEED TO DELETE RECORD FROM BLOCK HERE
+            }
+        }
+        SR_InsertEntry(tempMerge_fileDesc, minRecord);
+
+    }
+    if(firstBlockIndex + chunkSize <= numChunks || secondBlockIndex + chunkSize <= numChunks)                           //If there are more chunks which fit in the buffer, call recursively.
+        recursiveMergeSort(output_fileDesc, temp_fileDesc, chunkTable, numChunks, chunkSize, fieldNo, firstBlockIndex + chunkSize, secondBlockIndex + chunkSize);
+    else                                                                                                                //Else return ok and handle any excess blocks.
+        return BF_OK;
+    //DC Code End
+
 }
 
 BF_ErrorCode externalSort(int output_fileDesc, int temp_fileDesc, int fieldNo, int bufferSize){
@@ -200,7 +245,7 @@ BF_ErrorCode externalSort(int output_fileDesc, int temp_fileDesc, int fieldNo, i
   char* mdata;
   char** chunkTable;
   BF_Block* myBlock;
-  BF_Block_Init(&myBlock);  
+  BF_Block_Init(&myBlock);
 
 
   /* Creating metadata block of output file */
@@ -218,7 +263,7 @@ BF_ErrorCode externalSort(int output_fileDesc, int temp_fileDesc, int fieldNo, i
   CALL_OR_RETURN(BF_GetBlockCounter(temp_fileDesc, &totalBlocks));     // Count the total blocks
   totalChunks = countChunks(totalBlocks-1, bufferSize);
   
-  CALL_OR_RETURN(recursiveMergeSort(chunkTable, totalChunks, bufferSize, fieldNo));
+  CALL_OR_RETURN(recursiveMergeSort(output_fileDesc, temp_fileDesc, chunkTable, totalChunks, bufferSize, fieldNo, 0, totalChunks));
   
 
   BF_Block_Destroy(&myBlock);
