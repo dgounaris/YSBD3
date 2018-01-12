@@ -9,8 +9,8 @@ sr_main2:
 	@echo " Compile sr_main2 ...";
 	gcc -I ./include/ -L ./lib/ -Wl,-rpath,./lib/ ./examples/sr_main2.c ./src/sort_file.c -lbf -o ./build/sr_main2 -O2
 	find -name sorted_id.db -print0 | xargs -0 -I file mv file ./last_sorted_id.db
-	find -name sorted_name.db -print0 | xargs -0 -I file mv file ./last_unsorted_name.db
-	find -name sorted_surname.db -print0 | xargs -0 -I file mv file ./last_unsorted_surname.db
+	find -name sorted_name.db -print0 | xargs -0 -I file mv file ./last_sorted_name.db
+	find -name sorted_surname.db -print0 | xargs -0 -I file mv file ./last_sorted_surname.db
 
 sr_main3:
 	@echo " Compile sr_main3 ...";
