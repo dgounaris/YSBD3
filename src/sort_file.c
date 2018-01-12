@@ -73,17 +73,17 @@ void increaseRecordCount(char* data) {
  Utility function to get records from multiple block arrays, used in quicksort
  we suppose correct use, there is no check for false input 
 */
-Record* getSparseRecord(char** chunkTable, int index) {
+Record* getSparseRecord(char** dataTable, int index) {
   int passedRecords=0, i=0, bRecords;           //reminder, int in start of each blockdata shows how many records are in it
   while(1) {                                    //loop through block data to find the block containing the index
-    memcpy(&bRecords, chunkTable[i], sizeof(int));
+    memcpy(&bRecords, dataTable[i], sizeof(int));
     if (passedRecords+bRecords>=index) {        //index is in this block
       break;
     }
     passedRecords += bRecords;                  //if not in this block, change variables accordingly
     i++;
   }
-  Record* mRecord = (Record*)(chunkTable[i]+sizeof(int)+(index-passedRecords-1)*sizeof(Record));
+  Record* mRecord = (Record*)(dataTable[i]+sizeof(int)+(index-passedRecords-1)*sizeof(Record));
   return mRecord;
 }
 
@@ -109,34 +109,34 @@ int compareRecords(Record* r1, Record* r2, int fieldNo) {
 }
 
 /* Takes last element as pivot and splits for quicksort */
-int partition(char** chunkTable, int low, int high, int fieldNo) {
-  Record* pivot = getSparseRecord(chunkTable, high);
+int partition(char** dataTable, int low, int high, int fieldNo) {
+  Record* pivot = getSparseRecord(dataTable, high);
   Record* tempRec = malloc(sizeof(Record));
   Record* lowRec;
   int i=low;
   int j;
   for (j=low;j<=high-1;j++) {
-    Record* currRecord = getSparseRecord(chunkTable, j);
+    Record* currRecord = getSparseRecord(dataTable, j);
     if (compareRecords(currRecord, pivot, fieldNo)) {
-      lowRec = getSparseRecord(chunkTable, i);
+      lowRec = getSparseRecord(dataTable, i);
       memcpy(tempRec, currRecord, sizeof(Record));
       memcpy(currRecord, lowRec, sizeof(Record));
       memcpy(lowRec, tempRec, sizeof(Record));
       i++;
     }
   }
-  lowRec = getSparseRecord(chunkTable, i);
+  lowRec = getSparseRecord(dataTable, i);
   memcpy(tempRec, pivot, sizeof(Record));
   memcpy(pivot, lowRec, sizeof(Record));
   memcpy(lowRec, tempRec, sizeof(Record));
   return i;
 }
 
-void quickSort(char** chunkTable, int low, int high, int fieldNo) {
+void quickSort(char** dataTable, int low, int high, int fieldNo) {
   if (low < high) {
-    int pIndex = partition(chunkTable, low, high, fieldNo);
-    quickSort(chunkTable, low, pIndex-1, fieldNo);
-    quickSort(chunkTable, pIndex+1, high, fieldNo);
+    int pIndex = partition(dataTable, low, high, fieldNo);
+    quickSort(dataTable, low, pIndex-1, fieldNo);
+    quickSort(dataTable, pIndex+1, high, fieldNo);
   }
 }
 
@@ -144,7 +144,7 @@ BF_ErrorCode internalSort(int input_fileDesc, int temp_fileDesc, int fieldNo, in
   int i, k;
   int bRecords;
   int totalBlocks, currentBlock, totalRecords;
-  char** chunkTable;
+  char** dataTable;
   BF_Block* tempFileBlock;
   BF_Block_Init(&tempFileBlock);  
 
@@ -153,7 +153,7 @@ BF_ErrorCode internalSort(int input_fileDesc, int temp_fileDesc, int fieldNo, in
     BF_Block_Init(&mBlocks[i]);
   }
 
-  chunkTable = (char**)malloc(bufferSize*sizeof(char*));     //chunkTable is an array of pointers to the block data
+  dataTable = (char**)malloc(bufferSize*sizeof(char*));     //dataTable is an array of pointers to the block data
 
   CALL_OR_RETURN(BF_GetBlockCounter(input_fileDesc, &totalBlocks));     // Count the total blocks
   
@@ -161,20 +161,21 @@ BF_ErrorCode internalSort(int input_fileDesc, int temp_fileDesc, int fieldNo, in
   totalRecords = 0;     // counts total records in chunk, used in quicksort
   while (currentBlock < totalBlocks) {
     for(i = 0; (i < bufferSize) && (currentBlock < totalBlocks); i++) {        // Read block data from the chunk blocks
-      printf("%d of %d\n", currentBlock, totalBlocks-1);
+      // To debug uncomment following line
+      //printf("%d of %d\n", currentBlock, totalBlocks-1);
       CALL_OR_RETURN(BF_GetBlock(input_fileDesc, currentBlock, mBlocks[i]));
-      chunkTable[i] = BF_Block_GetData(mBlocks[i]);
-      memcpy(&bRecords, chunkTable[i], sizeof(int));
+      dataTable[i] = BF_Block_GetData(mBlocks[i]);
+      memcpy(&bRecords, dataTable[i], sizeof(int));
       totalRecords += bRecords;
       currentBlock++;
     }
-    quickSort(chunkTable, 1, totalRecords, fieldNo);        // Keep in mind that indexing for records is [1,total]
+    quickSort(dataTable, 1, totalRecords, fieldNo);        // Keep in mind that indexing for records is [1,total]
     for(k = 0; k < i; k++) {
       //to debug by checking a chunk sorted version of unsorted file, uncomment the following line
       //BF_Block_SetDirty(mBlocks[k]);
       CALL_OR_RETURN(BF_AllocateBlock(temp_fileDesc, tempFileBlock));
       char* tempBData = BF_Block_GetData(tempFileBlock);
-      memcpy(tempBData, chunkTable[k], BF_BLOCK_SIZE);
+      memcpy(tempBData, dataTable[k], BF_BLOCK_SIZE);
       BF_Block_SetDirty(tempFileBlock);
       CALL_OR_RETURN(BF_UnpinBlock(tempFileBlock));
       CALL_OR_RETURN(BF_UnpinBlock(mBlocks[k]));
@@ -187,7 +188,7 @@ BF_ErrorCode internalSort(int input_fileDesc, int temp_fileDesc, int fieldNo, in
     free(mBlocks[i]);
   }
   free(mBlocks);
-  free(chunkTable);
+  free(dataTable);
 
   return SR_OK;
 }
@@ -197,195 +198,254 @@ int countChunks(int totalBlocks, int chunkSize){
 }
 
 /*
- * Doc:
- */
-BF_ErrorCode recursiveMergeSort(int temp1_fileDesc, int temp2_fileDesc, char** chunkTable, int totalChunks, int chunkSize, int chunksToBeMerged, int fieldNo, BF_Block **pBlocks, int **indexArray, int *toggle){
-
-    //DC code Start
-    //Merging buffersize blocks...
-
-    int numChunkGroups = totalChunks / chunkSize;
-    int leftoverChunks = totalChunks % chunkSize;
-
-    if(totalChunks == 1)
-      return BF_OK;
-    else {
-        for(i=0; i< numChunkGroups; i++) {
-
-            for(int j=0; j<3; j++) {
-                for (int k = 0; k < chunksToBeMerged; k++) {
-                    if (j < 2)
-                        indexArray[j][k] = k * chunkSize + 1 + i*chunksToBeMerged*chunkSize;
-                    if (j == 2)
-                        indexArray[j][k] = 0;
-                }
-            }
-
-            for(j=0; j<chunksToBeMerged; j++){
-                CALL_OR_RETURN(BF_Block_GetBlock_GetData(&pBlocks[j], temp_fileDesc, indexArray[0][j] , chunkTable[j]))
-            }
-
-            Merge(chunksToBeMerged, indexArray, temp2_fileDesc, temp1_fileDesc, chunkTable, fieldNo, pBlocks);
-            totalChunks -= chunksToBeMerged;
-            totalChunks += 1;
-        }
-        if(leftoverChunks>1) {
-            for(int j=0; j<3; j++) {
-                for (int k = 0; k < leftoverChunks; k++) {
-                    if (j < 2)
-                        indexArray[j][k] = k * chunkSize + 1 + i*leftoverChunks*chunkSize;
-                    if (j == 2)
-                        indexArray[j][k] = 0;
-                }
-            }
-
-            for(j=0; j<chunksToBeMerged; j++){
-                if(j<leftoverChunks) {
-                    CALL_OR_RETURN(BF_Block_GetBlock_GetData(&pBlocks[j], temp_fileDesc, indexArray[0][j], chunkTable[j]));
-                }
-                else{
-                    pBlocks[j] = NULL;
-                    chunkTable[j] = NULL;
-                }
-            }
-
-            Merge(leftoverChunks, indexArray, temp2_fileDesc, temp1_fileDesc, chunkTable, fieldNo, pBlocks);
-            totalChunks -= leftoverChunks;
-            totalChunks += 1;
-
-        }
-    }
-    if(toggle == 0)
-        recursiveMergeSort(temp2_fileDesc, temp1_fileDesc, chunkTable, totalChunks, chunkSize * chunksToBeMerged, chunksToBeMerged, fieldNo, pBlocks, indexArray, 1);
-    else
-        recursiveMergeSort(temp2_fileDesc, temp1_fileDesc, chunkTable, totalChunks, chunkSize * chunksToBeMerged, chunksToBeMerged, fieldNo, pBlocks, indexArray, 0);
-    //DC Code End
-}
-
-/*
- * Doc:
+ * Doc: Function used to check if a whole char *array is null. Used later in Merge.
  */
 int checkNull(char **array, int index){
-    int counter=0;
-    for(int i =0; i<index; i++){
-        if(*array[i] == NULL)
+    int counter = 0;
+    for(int i = 0; i < index; i++)
+        if(array[i] == NULL)
             counter++;
-    }
-    if(counter==index)
+    if(counter == index)
         return 1;
     return 0;
 }
 
 /*
- * Doc:
+ * Doc: Gets the record specified by the block in the chunkTable[index] and by the record specified in the indexArray[2][index]
  */
-void GetCurrentRecord(char **chunkTable, int index, int **indexArray, Record *record){
-    memcpy(record, chunkTable[index] + indexArray[2][index]*sizeof(Record) + sizeof(int), sizeof(Record));
+void GetCurrentRecord(char **dataTable, int index, int **indexArray, Record *record){
+    memcpy(record, dataTable[index] + indexArray[2][index]*sizeof(Record) + sizeof(int), sizeof(Record));
 }
 
 /*
- * Doc:
+ * Doc: Increases the index in the indexArray[2][index] to show that we have successfully stored the current record and
+ *      that we move to the next one.
  */
-int IncreaseIndex(int **indexArray, int index){
-    int totalRecordsInBlock;
-    memcpy(&totalRecordsInBlock, chunkTable[index], sizeof(int));
-    //If current record index is equal to total records, return false.
-    if(indexArray[2][index] == totalRecordsInBlock)
+int IncreaseRecordIndex(int **indexArray, int index, char **dataTable){
+    int recordsInBlock;
+
+    memcpy(&recordsInBlock, dataTable[index], sizeof(int));
+    if(indexArray[2][index] == recordsInBlock)  // If current record index is equal to total records, all records have been checked
         return 0;
-    else
-        indexArray[2][index]++;
+    indexArray[2][index]++;
     return 1;
 }
 
 /*
- * Doc:
+ * Doc: Increases the index in the indexArray[1][index] and gets the next Block in the chunk,
+ *      if there is one and if that one is not NULL.
  */
-BF_ErrorCode GetNextBlock(char **chunkTable, int **indexArray, int index, BF_Block **PBlocks, int temp_fileDesc, int *ErrorCode=1){
+BF_ErrorCode GetNextBlock(char **dataTable, int **indexArray, int index, BF_Block **bufferBlocks, int temp_fileDesc, int *ErrorCode){
     int totalBlocks;
-    BF_GetBlockCounter(temp_fileDesc, &totalBlocks);
     int chunkSize = indexArray[0][1] - indexArray[0][0];
-    BF_UnpinBlock(PBlocks[index]);
-    if(indexArray[1][index] + 1 == chunkSize + indexArray[0][index])
-        ErrorCode = 0;
-    else if(totalBlocks == indexArray[1][index] + 1)
-        ErrorCode = 0;
-    else
-        CALL_OR_RETURN(BF_Block_GetBlock_GetData(&PBlocks[index], temp_fileDesc, ++indexArray[1][index], chunkTable[index]));
+    CALL_OR_RETURN(BF_GetBlockCounter(temp_fileDesc, &totalBlocks));
+    CALL_OR_RETURN(BF_UnpinBlock(bufferBlocks[index]));
+    if((indexArray[1][index] + 1 == chunkSize + indexArray[0][index]) || (totalBlocks == indexArray[1][index] + 1)){ // Chunk is finished, no new blocks to get
+        *ErrorCode = 0;
+    }
+    else{
+        printf("6\n");
+        indexArray[1][index]++; // Increase the current block's index
+        CALL_OR_RETURN(BF_Block_GetBlock_GetData(&bufferBlocks[index], temp_fileDesc, indexArray[1][index], &dataTable[index]));
+        printf("8\n");
+        //CHANGED THIS - WAS indexArray[1][index] before
+        indexArray[2][index] = 0; // Set record index to point to the first record again
+        *ErrorCode = 1;
+    }
     return BF_OK;
 }
 
+void InitiliazeMinRecord(Record *minrecord, int *pos, char **dataTable, int **indexArray, int numChunks){
+    int i;
+    for(i = 0; i < numChunks; i++){
+        if(dataTable[i] != NULL) {
+            GetCurrentRecord(dataTable, i, indexArray, minrecord);
+            *pos = i;
+        }
+    }
+}
+
 /*
- * Doc:
+ * Doc: This function is used to merge numChunks chunks. The function gets the minimum record
+ *      among the records pointed to by the chunkTable pointers and inserts it to a new Block in a temporary File.
  */
-BF_ErrorCode Merge(int numChunks, int **indexArray, int temp_fileDesc, int tempMerge_fileDesc, char **chunkTable, int fieldNo, BF_Block **pBlock){
-    //While the chunk array is not null...
-    int errorcode;
+BF_ErrorCode Merge(int numChunks, int **indexArray, int Read_fileDesc, int Write_fileDesc, char **dataTable, int fieldNo, BF_Block **bufferBlocks){
+    int i, pos, errorcode;
     Record minrecord, temprecord;
-    memcpy(&minrecord, chunkTable[0]+indexArray[2][0]* sizeof(Record), sizeof(Record));
-    while(!checkNull(chunkTable, numChunks)){
-        GetCurrentRecord(chunkTable, 0, indexArray, &minrecord);
-        for(int i=1; i < numChunks; i++){
-            if(chunkTable[i]!=NULL) {
-                GetCurrentRecord(chunkTable, i, indexArray, &temprecord);
-                if(compareRecords(temprecord, minrecord, fieldNo)){
+
+    memcpy(&minrecord, dataTable[0]+indexArray[2][0]* sizeof(Record), sizeof(Record));
+    while(!checkNull(dataTable, numChunks)){       // While the chunk array is not null, not all records have been checked
+        InitiliazeMinRecord(&minrecord, &pos, dataTable, indexArray, numChunks);    // Find the first available record to set as the minimum
+        for(i = 0; i < numChunks; i++){
+            if(dataTable[i] != NULL) {
+                GetCurrentRecord(dataTable, i, indexArray, &temprecord);
+                if(compareRecords(&temprecord, &minrecord, fieldNo)){
                     minrecord = temprecord;
                     pos = i;
                 }
             }
         }
-        if(!IncreaseIndex(indexArray, pos)) {
-            CALL_OR_RETURN(GetNextBlock(chunkTable, indexArray, pos, pBlocks, temp_fileDesc, &errorcode));
-            if(errorcode==0) {
-                chunkTable[pos] = NULL;
-                pBlock[pos] = NULL;
+        if(!IncreaseRecordIndex(indexArray, pos, dataTable)) { // Move the pointer to the next record, if all records checked get the next block
+            printf("1\n");
+            printf("index: %d indexArray[1][pos]: %d\n", pos,indexArray[1][pos]);
+            CALL_OR_RETURN(GetNextBlock(dataTable, indexArray, pos, bufferBlocks, Read_fileDesc, &errorcode));
+            printf("2\n");
+            if(errorcode == 0) { // no new blocks in chunk
+                dataTable[pos] = NULL;
+                bufferBlocks[pos] = NULL;
             }
         }
-        SR_InsertEntry(tempMerge_fileDesc, minrecord);
+        SR_InsertEntry(Write_fileDesc, minrecord); // Insert the minimum record to the file
     }
+
     return BF_OK;
 }
 
-BF_ErrorCode externalSort(int output_fileDesc, int temp_fileDesc, int fieldNo, int bufferSize, int *toggle){
+/*
+ * Doc: This function is called recursively and merges the current chunks by calling Merge for each one.
+ *      If there is only one chunk left, the function returns BF_OK. Else, it merges all chunk groups (chunks with buffersize blocks)
+ *      with a k-way merge (k = buffersize) and then
+ *      it merges the leftover chunks by using a k-way merge with k<buffersize.
+ */
+BF_ErrorCode recursiveMergeSort(int read_fileDesc, int write_fileDesc, char** dataTable, int chunkSize, int bufferSize, int fieldNo, BF_Block **bufferBlocks, int **indexArray, int *toggle){
+    int i, j, k;
+    int numChunkGroups, leftoverChunks, totalBlocks, totalChunks;
+    
+    CALL_OR_RETURN(BF_GetBlockCounter(read_fileDesc, &totalBlocks));     // Count the total blocks
+    printf("%d\n", totalBlocks);
+    fflush(stdout);
+    totalChunks = countChunks(totalBlocks-1, bufferSize);                // Count the total chunks
+     printf("%d\n", totalChunks);
+    fflush(stdout);
+    numChunkGroups = totalChunks / chunkSize;
+    leftoverChunks = totalChunks % chunkSize;
+    
+    printf("%d\n", numChunkGroups);
+    fflush(stdout);
 
-    int i;
-    int totalBlocks, totalChunks;
-    char* identifier = "SR_File";
-    char* mdata;
-    char** chunkTable;
+    if(totalChunks == 1)
+      return BF_OK;
+
+    for(i = 0; i < numChunkGroups; i++) {
+        /* Set the indexArray properly for Merge */
+        for(j = 0; j < 3; j++) {
+            for (k = 0; k < bufferSize-1; k++) {
+                if (j < 2)
+                    indexArray[j][k] = k*chunkSize + 1 + i*(bufferSize-1)*chunkSize;
+                else
+                    indexArray[j][k] = 0;
+            }
+        }
+        
+        ///////////////
+        for(j = 0; j < 3; j++) {
+            for (k = 0; k < bufferSize-1; k++) {
+                printf("%d - ", indexArray[j][k]);
+            }
+            printf("\n");
+        }
+        fflush(stdout);
+        ///////////////
+        
+        /* Set the bufferBlocks and dataTable properly for Merge */
+        for(j = 0; j < bufferSize-1; j++){
+            CALL_OR_RETURN(BF_Block_GetBlock_GetData(&bufferBlocks[j], read_fileDesc, indexArray[0][j], &dataTable[j]));
+            printf("1 : %d\n", bufferSize);
+        }
+        CALL_OR_RETURN(Merge(bufferSize-1, indexArray, write_fileDesc, read_fileDesc, dataTable, fieldNo, bufferBlocks));
+        printf("2\n");
+        totalChunks -= (bufferSize-2);
+    }
+    if(leftoverChunks > 1) {    // if last group has more than 1 chunks, they must be merged as well
+        /* Set the indexArray properly for Merge */
+        for(j = 0; j < 3; j++) {
+            for (k = 0; k < leftoverChunks; k++) {
+                if (j < 2)
+                    indexArray[j][k] = numChunkGroups*(bufferSize-1)*chunkSize + 1 + k*chunkSize;
+                else
+                    indexArray[j][k] = 0;
+            }
+        }
+        
+        ///////////////
+        for(j = 0; j < 3; j++) {
+            for (k = 0; k < bufferSize-1; k++) {
+                printf("%d  ", indexArray[j][k]);
+            }
+            printf("\n");
+        }
+        ///////////////
+        
+        /* Set the bufferBlocks and dataTable properly for Merge */
+        for(j = 0; j < bufferSize-1; j++){
+            if(j < leftoverChunks) {
+                CALL_OR_RETURN(BF_Block_GetBlock_GetData(&bufferBlocks[j], read_fileDesc, indexArray[0][j], &dataTable[j]));
+            }
+            else{
+                bufferBlocks[j] = NULL;
+                dataTable[j] = NULL;
+            }
+        }
+
+        CALL_OR_RETURN(Merge(leftoverChunks, indexArray, write_fileDesc, read_fileDesc, dataTable, fieldNo, bufferBlocks));
+        totalChunks -= (leftoverChunks-1);
+    }
+    else if(leftoverChunks == 1) {
+        for(i = (numChunkGroups*(bufferSize-1)*chunkSize + 1); i < totalBlocks-1; i++) {
+            CALL_OR_RETURN(BF_Block_GetBlock_GetData(&bufferBlocks[0], read_fileDesc, i, &dataTable[0]));
+            CALL_OR_RETURN(BF_Block_Allocate_GetData(&bufferBlocks[1], write_fileDesc, &dataTable[1]));
+            memcpy(dataTable[1], dataTable[0], BF_BLOCK_SIZE);
+            BF_Block_SetDirty(bufferBlocks[1]);
+            CALL_OR_RETURN(BF_UnpinBlock(bufferBlocks[0]));
+            CALL_OR_RETURN(BF_UnpinBlock(bufferBlocks[1]));
+        }
+    }
+
+    *toggle = ((*toggle) ? (0):(1)); // indicates whether file temp1 or tepm2 has the final sorted records
+    CALL_OR_RETURN(recursiveMergeSort(write_fileDesc, read_fileDesc, dataTable, chunkSize * (bufferSize-1), bufferSize, fieldNo, bufferBlocks, indexArray, toggle));
+}
+
+/*
+ * Doc: Function used to identify files, initialize Blocks and call the recursive function.
+ */
+BF_ErrorCode externalSort(int output_fileDesc, int temp_fileDesc, int fieldNo, int bufferSize, int *toggle){
+    int i, totalBlocks, totalChunks;
+    char *mdata, *identifier = "SR_File";
+    BF_Block *myBlock;
+    BF_Block **bufferBlocks;
+    char **dataTable;
+    int **indexArray;
 
     /* Creating metadata block of output file */
     CALL_OR_RETURN(BF_Block_Init_Allocate_GetData(&myBlock, output_fileDesc, &mdata)); // Initializing->allocating->gettingData
     memcpy(mdata, identifier, strlen(identifier)+1);
     BF_Block_SetDirty(myBlock);
     CALL_OR_RETURN(BF_UnpinBlock(myBlock));
+    BF_Block_Destroy(&myBlock);
 
-    BF_Block** pBlocks = (BF_Block**)malloc(bufferSize*sizeof(BF_Block*));
-    for (i = 0; i < bufferSize; i++) {
-        BF_Block_Init(&pBlocks[i]);
-    }
-    chunkTable = (char**)malloc(bufferSize*sizeof(char*));     //chunkTable is an array of pointers to the block data
-
-    CALL_OR_RETURN(BF_GetBlockCounter(temp_fileDesc, &totalBlocks));     // Count the total blocks
-    totalChunks = countChunks(totalBlocks-1, bufferSize);
-
-    //Index array format:
-    /*
+    /* Initializing indexArray, bufferBlocks, dataTable */
+    /*    Index array format:
      *    Starting position in chunk
      *    Current position in chunk
      *    Current record being compared
      */
-    int **indexArray = malloc(3 * sizeof(int*));
-    for(int i=0; i<3; i++)
-        indexArray[i] = malloc(bufferSize * sizeof(int));
+    indexArray = (int**)malloc(3 * sizeof(int*));
+    for(i = 0; i < 3; i++)
+        indexArray[i] = (int*)malloc((bufferSize-1) * sizeof(int));
+    bufferBlocks = (BF_Block**)malloc((bufferSize) * sizeof(BF_Block*)); // bufferBlocks works as the buffer by holding the pinned blocks
+    for (i = 0; i < (bufferSize); i++)
+        BF_Block_Init(&bufferBlocks[i]);
+    dataTable = (char**)malloc((bufferSize) * sizeof(char*));      // dataTable is an array of pointers to the bufferblocks data
 
-    CALL_OR_RETURN(recursiveMergeSort(output_fileDesc, temp_fileDesc, chunkTable, totalChunks, bufferSize, bufferSize, fieldNo, pBlocks, indexArray, &toggle));
+    /* Merging chunks from one file to another recursively until all records are sorted */
+    printf("Going in\n");
+    CALL_OR_RETURN(recursiveMergeSort(temp_fileDesc, output_fileDesc, dataTable, bufferSize, bufferSize, fieldNo, bufferBlocks, indexArray, toggle));
 
-    BF_Block_Destroy(&myBlock);
-    for (i = 0; i < bufferSize; i++) {
-    free(pBlocks[i]);
-    }
-    free(pBlocks);
-    free(chunkTable);
+    for (i = 0; i < bufferSize; i++)
+        BF_Block_Destroy(&(bufferBlocks[i]));
+    free(bufferBlocks);
+    free(dataTable);
+    free(indexArray);
 
     return SR_OK;
 }
@@ -503,13 +563,15 @@ SR_ErrorCode SR_SortedFile(const char* input_filename, const char* output_filena
 
     CALL_OR_RETURN(externalSort(output_fileDesc, temp_fileDesc, fieldNo, bufferSize, &toggle));
 
-    SR_CloseFile(temp_fileDesc);
-    SR_CloseFile(output_fileDesc);
+    CALL_OR_RETURN(SR_CloseFile(temp_fileDesc));
+    CALL_OR_RETURN(SR_CloseFile(output_fileDesc));
 
     if(toggle = 0){
-        remove("tempFile");
+        remove(temp_filename);
     }
     else{
+        remove(output_filename);
+        rename(temp_filename, output_filename);
     }
 
     return SR_OK;
