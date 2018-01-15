@@ -1,6 +1,8 @@
 #ifndef SORT_FILE_H
 #define SORT_FILE_H
 
+#include "bf.h"
+
 typedef enum SR_ErrorCode {
   SR_OK,
   SR_ERROR
@@ -12,6 +14,42 @@ typedef struct Record {
 	char surname[20];
 	char city[20];
 } Record;
+
+///////////////////////////////////////// Function Declarations /////////////////////////////////////////
+
+/* Utility Functions */
+int checkAttributes(int, int);
+BF_ErrorCode BF_Block_Init_Allocate_GetData(BF_Block**, int, char**);
+BF_ErrorCode BF_Block_Allocate_GetData(BF_Block**, int, char**);
+BF_ErrorCode BF_Block_Init_GetBlock_GetData(BF_Block**, int, int, char**);
+BF_ErrorCode BF_Block_GetBlock_GetData(BF_Block **, int, int, char**);
+int getRecordCount(char*);
+void setRecordCount(char*, int);
+void increaseRecordCount(char*);
+
+/* Internal Sorting */
+Record* getSparseRecord(char**, int);
+int compareRecords(Record*, Record*, int);
+int partition(char**, int, int, int );
+void quickSort(char**, int, int, int );
+BF_ErrorCode internalSort(int, int, int, int);
+
+/* External Sorting */
+int countChunks(int, int);
+int allChecked(int **, int);
+void GetCurrentRecord(char **, int dex, int **, Record *);
+int IncreaseRecordIndex(int **, int, char **);
+BF_ErrorCode GetNextBlock(int, BF_Block **, char **, int **, int, int *);
+void InitiliazeMinRecord(Record *, int *, char **, int **, int);
+BF_ErrorCode insertInOutputBlock(int, BF_Block **, char **, int , Record);
+BF_ErrorCode setupForMerge(int, BF_Block **, char **, int **, int, int, int);
+BF_ErrorCode setupForMergeLeftoverChunks(int, BF_Block **, char **, int **, int, int, int, int);
+BF_ErrorCode Merge(int, int, BF_Block **, char **, int **, int, int, int);
+BF_ErrorCode recursiveMergeSort(BF_Block **, char **, int **, int, int, int);
+BF_ErrorCode externalSort(int, int);
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
  * Η συνάρτηση SR_Init χρησιμοποιείται για την αρχικοποίηση του sort_file.
@@ -93,11 +131,6 @@ SR_ErrorCode SR_SortedFile(
   int fieldNo,                  /* αύξων αριθμός πεδίου προς ταξινόμηση */
   int bufferSize            /* Το πλήθος των block μνήμης που έχετε διαθέσιμα */
   );
-
-int compareRecords(Record* r1, Record* r2, int fieldNo);
-Record* getSparseRecord(char** chunkTable, int index);
-int partition(char** chunkTable, int low, int high, int fieldNo);
-void quickSort(char** chunkTable, int low, int high, int fieldNo);
 
 /*
  * Η συνάρτηση SR_PrintAllEntries χρησιμοποιείται για την εκτύπωση όλων των
